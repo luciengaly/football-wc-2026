@@ -25,6 +25,7 @@ echo === %TS% === Starting daily refresh >> data\snapshots\refresh.log
 
 call .venv\Scripts\activate.bat
 
+REM `refresh` does: ingest (martj42) + fetch odds (The Odds API) + build + predict
 python -m wc2026.pipeline refresh >> data\snapshots\refresh.log 2>&1
 set RC=%errorlevel%
 

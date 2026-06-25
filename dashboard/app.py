@@ -73,7 +73,8 @@ def load_all_snapshots() -> pd.DataFrame:
 st.sidebar.title("🏆 WC 2026 Predictor")
 page = st.sidebar.radio(
     "Page",
-    ["🏆 Tournament", "🔮 Predictions", "🎯 Score detail", "📊 Performance", "ℹ️ About"],
+    ["🏆 Tournament", "🔮 Predictions", "🎯 Score detail", "🃏 Conseil MPP",
+     "📊 Performance", "ℹ️ About"],
 )
 
 wc = load_wc2026()
@@ -160,7 +161,12 @@ def compute_group_standings(group_matches: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Page: Predictions
 # ---------------------------------------------------------------------------
-CHAMPION_MODEL = "M2_poisson"
+# Designated models (configuration — the live ranking lives on the Performance
+# page, the rationale + numbers in docs/DECISIONS.md):
+#   - W/D/L            -> M13_blend3 (results + odds + injury-adjusted value)
+#   - Score distribution -> M2 (odds and value give no score distribution)
+CHAMPION_MODEL = "M13_blend3"
+SCORE_CHAMPION_MODEL = "M2_poisson"
 
 
 def page_predictions() -> None:
@@ -173,90 +179,84 @@ def page_predictions() -> None:
 
     snap_date = latest["as_of"].iloc[0] if "as_of" in latest else "—"
     available_models = sorted(latest["model"].unique().tolist())
-    st.caption(
-        f"Snapshot: **{snap_date}** · Champion model (per S3 benchmark): "
-        f"**{CHAMPION_MODEL}** · Models in snapshot: {', '.join(available_models)}"
-    )
 
-    view = st.radio(
-        "View",
-        ["Champion only", "Side-by-side comparison"],
-        horizontal=True,
-        index=0,
-    )
-
-    if view == "Champion only":
-        champ = latest[latest["model"] == CHAMPION_MODEL].sort_values("date")
-        if champ.empty:
-            st.warning(f"Champion {CHAMPION_MODEL} not in snapshot.")
-            return
-        champ = champ.copy()
-        champ["date"] = pd.to_datetime(champ["date"]).dt.date
-
-        if "e_h" in champ.columns:
-            # Use the expected scoreline (λ_H : λ_A) as the canonical "score" —
-            # it summarises the full distribution rather than just the modal cell
-            # (which is misleadingly low for most matches; cf. user feedback).
-            champ["Expected"] = (
-                champ["e_h"].round(1).astype(str) + " – " + champ["e_a"].round(1).astype(str)
-            )
-            cols = ["date", "stage", "group", "home_team", "away_team",
-                    "p_home", "p_draw", "p_away", "Expected", "p_btts", "p_over_2_5"]
-            # Add advance columns when present (knockout matches)
-            if "p_home_advances" in champ.columns and champ["p_home_advances"].notna().any():
-                cols += ["p_home_advances", "p_away_advances"]
-            show = champ[cols].rename(columns={
-                "p_home": "P(H)", "p_draw": "P(D)", "p_away": "P(A)",
-                "p_btts": "BTTS", "p_over_2_5": "O2.5",
-                "p_home_advances": "P(H adv)", "p_away_advances": "P(A adv)",
-            })
-            fmt = {"P(H)": "{:.0%}", "P(D)": "{:.0%}", "P(A)": "{:.0%}",
-                   "BTTS": "{:.0%}", "O2.5": "{:.0%}",
-                   "P(H adv)": "{:.0%}", "P(A adv)": "{:.0%}"}
-            st.dataframe(
-                show.style.format(fmt).background_gradient(
-                    subset=["P(H)", "P(D)", "P(A)"], cmap="RdYlGn"
-                ),
-                hide_index=True,
-                use_container_width=True,
-                height=620,
-            )
-        else:
-            show = champ[
-                ["date", "stage", "group", "home_team", "away_team",
-                 "p_home", "p_draw", "p_away"]
-            ].rename(columns={"p_home": "P(home)", "p_draw": "P(draw)", "p_away": "P(away)"})
-            st.dataframe(
-                show.style.format(
-                    {"P(home)": "{:.1%}", "P(draw)": "{:.1%}", "P(away)": "{:.1%}"}
-                ).background_gradient(
-                    subset=["P(home)", "P(draw)", "P(away)"], cmap="RdYlGn"
-                ),
-                hide_index=True,
-                use_container_width=True,
-                height=620,
-            )
+    # Move champion to the top of the dropdown when present
+    if CHAMPION_MODEL in available_models:
+        ordered = [CHAMPION_MODEL] + [m for m in available_models if m != CHAMPION_MODEL]
     else:
-        # Pivot models side by side
-        keys = ["date", "home_team", "away_team"]
-        pivot = latest.pivot_table(
-            index=keys,
-            columns="model",
-            values=["p_home", "p_draw", "p_away"],
-        ).sort_index()
-        # Flatten column labels (metric, model)
-        pivot.columns = [f"{model}·{metric.split('_')[-1].upper()}" for metric, model in pivot.columns]
-        pivot = pivot.reset_index()
-        pivot["date"] = pd.to_datetime(pivot["date"]).dt.date
-        proba_cols = [c for c in pivot.columns if "·" in c]
-        st.dataframe(
-            pivot.style.format({c: "{:.1%}" for c in proba_cols}).background_gradient(
-                subset=proba_cols, cmap="RdYlGn"
-            ),
-            hide_index=True,
-            use_container_width=True,
-            height=620,
+        ordered = available_models
+
+    selected_model = st.selectbox(
+        "Model",
+        ordered,
+        index=0,
+        format_func=lambda m: (
+            f"⭐ {m} (W/D/L champion)" if m == CHAMPION_MODEL
+            else f"📊 {m} (score champion)" if m == SCORE_CHAMPION_MODEL
+            else m
+        ),
+    )
+    st.caption(
+        f"Snapshot: **{snap_date}** · ⭐ **{CHAMPION_MODEL}** — W/D/L "
+        f"(blend résultats + cotes + valeur d'effectif) · "
+        f"📊 **{SCORE_CHAMPION_MODEL}** — distribution de scores. "
+        f"Classement live sur la page Performance. "
+        f"Modèles disponibles : {', '.join(available_models)}"
+    )
+
+    rows = latest[latest["model"] == selected_model].sort_values("date").copy()
+    if rows.empty:
+        st.warning(f"Model {selected_model} not in snapshot.")
+        return
+    rows["date"] = pd.to_datetime(rows["date"]).dt.date
+
+    if "score_mode_h" in rows.columns and rows["score_mode_h"].notna().any():
+        # Modal score (integer) on this page; E[H]:E[A] decimal lives on Score detail.
+        rows["Score"] = (
+            rows["score_mode_h"].astype("Int64").astype(str)
+            + " – "
+            + rows["score_mode_a"].astype("Int64").astype(str)
         )
+        cols = ["date", "stage", "group", "home_team", "away_team",
+                "p_home", "p_draw", "p_away", "Score", "p_btts", "p_over_2_5"]
+        if "p_home_advances" in rows.columns and rows["p_home_advances"].notna().any():
+            cols += ["p_home_advances", "p_away_advances"]
+        show = rows[cols].rename(columns={
+            "p_home": "P(H)", "p_draw": "P(D)", "p_away": "P(A)",
+            "p_btts": "BTTS", "p_over_2_5": "O2.5",
+            "p_home_advances": "P(H adv)", "p_away_advances": "P(A adv)",
+        })
+        fmt = {"P(H)": "{:.0%}", "P(D)": "{:.0%}", "P(A)": "{:.0%}",
+               "BTTS": "{:.0%}", "O2.5": "{:.0%}",
+               "P(H adv)": "{:.0%}", "P(A adv)": "{:.0%}"}
+    else:
+        # Model has no score distribution (e.g. M1 Elo, M4 LightGBM W/D/L only)
+        cols = ["date", "stage", "group", "home_team", "away_team",
+                "p_home", "p_draw", "p_away"]
+        if "p_home_advances" in rows.columns and rows["p_home_advances"].notna().any():
+            cols += ["p_home_advances", "p_away_advances"]
+        show = rows[cols].rename(columns={
+            "p_home": "P(H)", "p_draw": "P(D)", "p_away": "P(A)",
+            "p_home_advances": "P(H adv)", "p_away_advances": "P(A adv)",
+        })
+        fmt = {"P(H)": "{:.0%}", "P(D)": "{:.0%}", "P(A)": "{:.0%}",
+               "P(H adv)": "{:.0%}", "P(A adv)": "{:.0%}"}
+
+    # Single 0%→white / 100%→dark-green scale, shared across all probability
+    # columns so the colours are directly comparable cell-to-cell. Default
+    # pandas behaviour colours each column independently (min→red, max→green
+    # of that column), which was confusing for probability columns where the
+    # max naturally varies.
+    proba_cols = [c for c in ["P(H)", "P(D)", "P(A)", "P(H adv)", "P(A adv)"]
+                  if c in show.columns]
+    st.dataframe(
+        show.style.format(fmt).background_gradient(
+            subset=proba_cols, cmap="Greens", vmin=0.0, vmax=1.0, axis=None,
+        ),
+        hide_index=True,
+        use_container_width=True,
+        height=620,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -341,11 +341,11 @@ def page_performance() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # Score-level metrics if score_mode_h is present (champion model only)
+    # Score-level metrics filtered to the score champion (M2 — best on exact-acc)
     has_scores = "score_mode_h" in merged.columns and merged["score_mode_h"].notna().any()
     if has_scores:
-        st.subheader("Score-level live metrics (champion model only)")
-        m2 = merged[merged["model"] == CHAMPION_MODEL].dropna(subset=["score_mode_h"]).copy()
+        st.subheader(f"Score-level live metrics ({SCORE_CHAMPION_MODEL} — score champion)")
+        m2 = merged[merged["model"] == SCORE_CHAMPION_MODEL].dropna(subset=["score_mode_h"]).copy()
         if not m2.empty:
             m2["score_correct"] = (
                 (m2["score_mode_h"].astype(int) == m2["true_home"].astype(int))
@@ -359,9 +359,9 @@ def page_performance() -> None:
             cols[2].metric("MAE home goals", f"{mae_h:.2f}")
             cols[3].metric("MAE away goals", f"{mae_a:.2f}")
 
-            # Cumulative score trajectory (champion only)
+            # Cumulative score trajectory (score champion only)
             score_traj = cumulative_score_metrics(
-                merged[merged["model"] == CHAMPION_MODEL].assign(
+                merged[merged["model"] == SCORE_CHAMPION_MODEL].assign(
                     true_home=lambda d: d["true_home"],
                     true_away=lambda d: d["true_away"],
                 )
@@ -374,7 +374,7 @@ def page_performance() -> None:
                 )
                 fig = px.line(
                     score_traj, x="date", y=metric, markers=True,
-                    title=f"Cumulative {metric} (champion = {CHAMPION_MODEL})",
+                    title=f"Cumulative {metric} (score champion = {SCORE_CHAMPION_MODEL})",
                 )
                 fig.update_layout(height=350, hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
@@ -409,8 +409,8 @@ def page_score_detail() -> None:
     st.title("🎯 Score Distribution per Match")
     st.caption(
         "Joint score distribution P(home_goals, away_goals) under the "
-        "**champion model** (M2 Poisson). Pick a match and inspect the "
-        "heatmap, expected score, and aggregated markets (BTTS, O/U 2.5)."
+        f"score-distribution model ({SCORE_CHAMPION_MODEL}). Pick a match and "
+        "inspect the heatmap, expected score, and aggregated markets (BTTS, O/U 2.5)."
     )
 
     upcoming = wc[wc["status"] == "scheduled"].sort_values("date").copy()
@@ -505,24 +505,117 @@ def page_score_detail() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Page: Conseil MPP (betting advisor)
+# ---------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _fit_mpp_models(as_of_str: str):
+    """Fit P(result)=M13 and P(score)=M2 on data strictly before as_of. Cached."""
+    from wc2026.ingestion.historical import load_results
+    from wc2026.ingestion.market_value import get_shared_store
+    from wc2026.models.blend3 import Blend3
+    from wc2026.models.poisson import PoissonIndependent
+
+    results = load_results(DATA_DIR / "raw" / "results.csv")
+    training = results[results["date"] < pd.Timestamp(as_of_str)].copy()
+    get_shared_store()
+    return Blend3().fit(training), PoissonIndependent().fit(training)
+
+
+def page_mpp() -> None:
+    from wc2026.mpp.optimizer import favorite_score, optimal_score
+    from wc2026.mpp.scoring import result_sign
+
+    st.title("🃏 Conseil MPP — Mon Petit Prono")
+    st.caption(
+        "Score à pronostiquer pour **maximiser l'espérance de points MPP** : "
+        "`score* = argmax_s [ cote(R_s)·P(résultat) + bonus·P(score) ]`. "
+        "P(résultat) via M13, P(score) via M2. Avantage terrain appliqué "
+        "uniquement aux nations hôtes (USA/Canada/Mexique)."
+    )
+
+    cotes_path = DATA_DIR / "mpp" / "mpp_cotes.csv"
+    if not cotes_path.exists():
+        st.warning("Fichier `data/mpp/mpp_cotes.csv` introuvable. Remplis les cotes d'abord.")
+        return
+    mpp = pd.read_csv(cotes_path)
+    upcoming = mpp[(mpp["status"] == "scheduled") & mpp["cote_home_win"].notna()].copy()
+    if upcoming.empty:
+        st.info("Aucun match à venir avec cotes renseignées dans `mpp_cotes.csv`.")
+        return
+    upcoming["date"] = pd.to_datetime(upcoming["date"])
+
+    bonus = st.slider("Bonus rareté moyen (points si score exact)", 0, 100, 40, 5)
+
+    with st.spinner("Calcul des modèles (M13 + M2)…"):
+        as_of = upcoming["date"].min().strftime("%Y-%m-%d")
+        m13, m2 = _fit_mpp_models(as_of)
+        # authoritative neutral flag from source
+        wc_n = wc[["date", "home_team", "away_team", "neutral"]].copy()
+        wc_n["date"] = pd.to_datetime(wc_n["date"])
+        feats = upcoming.merge(wc_n, on=["date", "home_team", "away_team"], how="left")
+        feats["neutral"] = feats["neutral"].fillna(True)
+        p13 = m13.predict_proba(feats).to_numpy()
+        sd = m2.predict_score_dist(feats)
+
+    rows = []
+    for i, (_, m) in enumerate(feats.iterrows()):
+        cotes = (m["cote_home_win"], m["cote_draw"], m["cote_away_win"])
+        pr = (p13[i, 0], p13[i, 1], p13[i, 2])
+        (h, a), ev = optimal_score(*cotes, pr, sd[i], bonus=bonus)
+        fav = favorite_score(*cotes, sd[i])
+        reco_res = {"H": m["home_team"], "D": "Nul", "A": m["away_team"]}[result_sign(h, a)]
+        is_value = (h, a) != fav
+        rows.append({
+            "Date": m["date"].date(),
+            "Match": f"{m['home_team']} – {m['away_team']}",
+            "Cotes H/N/A": f"{int(cotes[0])}/{int(cotes[1])}/{int(cotes[2])}",
+            "P(H/N/A)": f"{pr[0]:.0%}/{pr[1]:.0%}/{pr[2]:.0%}",
+            "Score conseillé": f"{h}-{a}",
+            "Pari": reco_res,
+            "EV (pts)": ev,
+            "💎 Value": "✅" if is_value else "",
+        })
+    table = pd.DataFrame(rows).sort_values("EV (pts)", ascending=False)
+    st.dataframe(
+        table.style.format({"EV (pts)": "{:.1f}"}).background_gradient(
+            subset=["EV (pts)"], cmap="Greens"
+        ),
+        hide_index=True, use_container_width=True, height=560,
+    )
+
+    st.caption(
+        "💎 Value = le score conseillé diffère du favori marché (cote compressée "
+        "ou foule sous-cotée). C'est là que la stratégie EV gagne des places — "
+        "au prix d'une précision résultat plus basse mais de plus de points sur la durée."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Page: About
 # ---------------------------------------------------------------------------
 def page_about() -> None:
     st.title("ℹ️ About")
     st.markdown("""
-    **WC 2026 Match Prediction System** — built progressively over the duration
-    of the 2026 FIFA World Cup.
+    **WC 2026 Match Prediction System** — prédiction par match (W/D/L et
+    distribution de scores) pour la Coupe du Monde 2026, avec un optimiseur de
+    pronostics *Mon Petit Prono*.
 
-    - **Source of truth**: [martj42/international_results](https://github.com/martj42/international_results)
-    - **Elo**: computed in-house using the World Football Elo formula
-    - **Models bench**: M1 Elo · M2 Poisson · M3 Dixon-Coles · M4 LightGBM
-    - **Champion (per S3 benchmark)**: M2 Poisson — best log-loss / Brier / RPS
-      across 290 matches in 6 recent tournaments
+    **Sources de données (100% gratuites)**
+    - Matchs internationaux : [martj42/international_results](https://github.com/martj42/international_results)
+    - Elo : calculé en interne (formule World Football Elo)
+    - Cotes : The Odds API · valeurs d'effectif & blessures : Transfermarkt
 
-    Scope: per-match prediction of W/D/L (done) and exact scores (in progress).
-    Tournament-winner / bracket simulation is intentionally out of scope.
+    **Approche** — plusieurs familles de modèles (Elo, Poisson/Dixon-Coles,
+    gradient boosting, cotes de marché, valeur marchande) et leurs blends. Le
+    modèle mis en avant pour chaque tâche est indiqué dans la page Predictions ;
+    leur **classement live** est sur la page **Performance**.
 
-    See `docs/ROADMAP.md` and `docs/DECISIONS.md` in the repo for the full plan.
+    **Hors périmètre** : vainqueur du tournoi, simulation du bracket, qualifs par groupe.
+
+    Détails et justifications : `docs/ROADMAP.md`, `docs/DECISIONS.md`, `docs/MPP.md`.
+
+    ---
+    _🎨 vibe-codé par Lucien Galy_
     """)
 
 
@@ -535,6 +628,8 @@ elif page == "🔮 Predictions":
     page_predictions()
 elif page == "🎯 Score detail":
     page_score_detail()
+elif page == "🃏 Conseil MPP":
+    page_mpp()
 elif page == "📊 Performance":
     page_performance()
 elif page == "ℹ️ About":

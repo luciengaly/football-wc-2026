@@ -57,16 +57,36 @@ def cmd_build(_args: argparse.Namespace) -> int:
 
 
 def _registered_models() -> dict[str, type]:
-    """All currently-implemented models. Add new ones here."""
+    """Models run in the live pipeline.
+
+    Sprint S7-S9 negative results — kept out of the live registry:
+      - M5_nb Negative Binomial (ADR-015): degenerates to Poisson on our data.
+      - M6_stack LogReg meta-learner (ADR-016): correlated base models, no gain.
+      - M2_cal/M3_cal isotonic calibration (ADR-017): hurts more than helps.
+      - M7 PyMC bayesian (ADR-019): empirical Bayes shows no gain expected.
+      - M8 LGBM 49-classes (ADR-020): worse than M2 on score metrics.
+    Sprint S10 — odds from The Odds API:
+      - M9_odds: only available for matches that bookmakers have published
+        odds for. Returns NaN for matches without coverage; downstream falls
+        back to the generative models.
+    """
+    from wc2026.models.blend import Blend
+    from wc2026.models.blend3 import Blend3
     from wc2026.models.dixon_coles import DixonColes
     from wc2026.models.elo_baseline import EloBaseline
     from wc2026.models.lightgbm_clf import LightGBMClassifier
+    from wc2026.models.market_value_model import MarketValueModel
+    from wc2026.models.odds_model import OddsModel
     from wc2026.models.poisson import PoissonIndependent
     return {
         "M1_elo": EloBaseline,
         "M2_poisson": PoissonIndependent,
         "M3_dixon_coles": DixonColes,
         "M4_lightgbm": LightGBMClassifier,
+        "M9_odds": OddsModel,
+        "M11_blend": Blend,
+        "M12_market_value": MarketValueModel,
+        "M13_blend3": Blend3,
     }
 
 
@@ -159,6 +179,13 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     rc = cmd_ingest(args)
     if rc != 0:
         return rc
+    # Best-effort odds refresh — never fail the pipeline if odds are down
+    try:
+        from wc2026.ingestion.odds import fetch_and_save
+        print(f"[{datetime.now():%Y-%m-%d %H:%M}] Fetching odds from The Odds API...")
+        fetch_and_save(RAW)
+    except Exception as e:
+        print(f"  WARNING: odds fetch failed ({e}). Continuing without fresh odds.")
     rc = cmd_build(args)
     if rc != 0:
         return rc

@@ -2,7 +2,8 @@
 
 > Tournoi en cours : 11 juin 2026 → 19 juillet 2026
 > Aujourd'hui : 19 juin 2026 (J0). Phase de groupes journée 2.
-> Sortie cible MVP fonctionnel : J+9 (28 juin), avant les 16es.
+>
+> **Objectif principal mis à jour** : maximiser la précision de prédiction de **score** et de **résultat** (log-loss minimal, exact-score accuracy maximale). Pas de gestion de bankroll — c'est un système gratuit, on empile les modèles tant qu'ils apportent du signal.
 
 ## Statut sprints
 
@@ -13,9 +14,18 @@
 | S3 — Bench complet + désignation | J0 | ✅ fait | M3 Dixon-Coles, M4 LightGBM, calibration, ensemble, **M2 désigné gagnant** |
 | S4 — Prédiction de scores | J0 | ✅ fait (J0) | Distributions de scores M2/M3 exposées, métriques score-niveau, **M2 confirmé champion** sur 4/6 métriques score |
 | S5 — Dashboard complet | J0 | ✅ fait | Score detail (heatmap Plotly), Predictions enrichie, Performance live avec match-par-match |
-| S6 — Phase tournoi live | J0 → 19 juillet | 🟡 en cours | Backfill snapshots passés ✅, refresh quotidien ⚪, monitoring continu ⚪ |
+| S6 — Phase tournoi live | J0 → 19 juillet | 🟡 en cours | Backfill ✅, refresh quotidien ⚪, monitoring ✅, knockout ✅ |
+| S7 — Push précision : quick wins | J0 | ✅ clos (négatif) | M5_nb dégénère, M6_stack & calibration n'aident pas. M3 promu champion W/D/L (ADR-018) |
+| S8 — Bayesian hiérarchique | J0 | ⏸️ skip (négatif empirical Bayes) | Ridge CV montre M2 déjà optimal — PyMC ne va pas aider (ADR-019) |
+| S9 — M8 score-direct LightGBM | J0 | ✅ clos (négatif) | M8 ne bat pas M2 sur exact-acc ni score log-loss (ADR-020) |
+| **🛑 Plafond atteint sans données externes** | J0 | 📌 état | M2/M3 = SOTA-relatif avec données martj42 seules (ADR-021) |
+| S10 — Cotes bookmakers | J+3 | ✅ clos (positif) | M9_odds bat M2/M3 (ADR-023). Blend M11=M3+M9 (ADR-024). |
+| **S11 — Valeur marchande (Transfermarkt)** | J+4 | ✅ clos (positif) | M12 valeur joueurs bat l'Elo (Peeters confirmé, ADR-025). Signal orthogonal → **champion W/D/L = M13_blend3 (M3+M9+M12i)**, meilleur log-loss + ECE sur le régime live (ADR-026). **Bonus blessures** : M12i (squad disponible) bat M12 sur les 5 métriques, intégré au champion (ADR-027). |
+| **S12 — Optimiseur MPP** | J+14 | ✅ clos (positif) | Module de pronostic "Mon Petit Prono" : maximise l'espérance de points (`argmax_s cote·P(R)+bonus·P(score)`). Backtest : **+32% de points vs prono réel** (ADR-028). Page dashboard "🃏 Conseil MPP", doc `docs/MPP.md`. |
 
 **Hors périmètre** : prédiction du vainqueur du tournoi, simulation Monte Carlo du bracket, probabilités de qualification par groupe. Le focus est la prédiction *par match* (W/D/L et score).
+
+**Mis hors priorité** : cotes des bookmakers (légal/ToS), données joueur (engineering trop lourd vs gain) — voir [DECISIONS.md] pour la justification.
 
 Légende : ⚪ pas commencé · 🟡 en cours · ✅ fait · 🔴 bloqué
 
@@ -158,4 +168,53 @@ Avoir un dataset reproductible en local avec tous les matchs internationaux + El
 | Calendrier serré (1 mois) | Certain | Moyenne | MVP modèle simple privilégié, raffinement après |
 | martj42 mise à jour tardive d'un match | Moyenne | Faible | Vérification quotidienne, fallback Wikipedia possible |
 | Distribution de scores difficile à valider sur 1 tournoi | Élevée | Moyenne | Backtest pluri-tournois (290 matchs déjà disponibles) |
-| Différence score/exacte M2 vs M3 dans le bruit | Élevée | Faible | Comparer multi-tournois, choisir M3 si correction τ aide réellement les low-scores |
+| Différence M2 vs M3 vs M5_nb dans le bruit | Élevée | Faible | Backtest étendu, désigner champion sur métrique stable (RPS) |
+| Stacking overfit la validation window | Moyenne | Moyenne | Window 365j, ridge sur meta-learner, monitoring live |
+| Bayesian (PyMC) trop lent pour refit quotidien | Moyenne | Moyenne | Si > 5min/fit : fit hebdomadaire + warm-start posterior |
+
+---
+
+## S7 — Push précision : quick wins (J0) ✅ FERMÉ (résultats négatifs)
+
+### Bilan
+Tous les leviers de la vague 1 ont été essayés et **aucun n'a battu M2/M3** sur le bench étendu (290 matchs / 6 tournois). Les trois résultats négatifs sont documentés en détail :
+
+- [x] **A — M5_nb Negative Binomial** : dégénère exactement en Poisson (α optimal ≈ 0). L'over-dispersion marginale (var/mean=1.80) est entièrement expliquée par l'hétérogénéité des forces d'équipes. Voir [ADR-015].
+- [x] **C — Calibration isotonic** : sacrifie 1 an de training pour fitter les calibrateurs → log-loss 0.96 → 0.99 et accuracy 57% → 53%. Voir [ADR-017].
+- [x] **D — M6_stack LogReg multinomial** : ne bat ni M2 ni M3 sur 290 matchs (gain WC 2022 isolé sur 64 matchs = bruit). M1-M4 trop corrélés pour exploiter du stacking. Voir [ADR-016].
+
+### Bénéfice indirect
+Le refactor 2-étapes de M3 (initialement pour éliminer les warnings L-BFGS, [ADR-013]) combiné au bench étendu a révélé que **M3 dépasse M2 sur l'accuracy W/D/L** (57.24% vs 56.55%) et l'**ECE** (0.026 vs 0.032). M3 est promu champion W/D/L. M2 reste champion score-distribution (exact-acc 13.79% vs 12.41%). Voir [ADR-018].
+
+### Apprentissage pour S8
+Pour qu'un nouveau modèle apporte du signal il faut une **vraie décorrélation** des erreurs. M7 bayésien hiérarchique est de bonne foi un modèle différent (priors structurels, shrinkage), pas une variation de M2. C'est notre meilleure chance d'améliorer sur 290 matchs.
+
+---
+
+## S8 — Push précision : Bayesian hiérarchique (J+2 → J+4) ⚪ À FAIRE
+
+### Objectif
+M7 = Dixon-Coles hiérarchique bayésien (PyMC, NUTS sampling). Les forces d'équipes sont des draws d'un prior global (shrinkage), ce qui aide particulièrement les ~6 équipes peu données (Curaçao, Cap-Vert, Jordanie…).
+
+### Tâches
+- [ ] Spec model PyMC : `att[t] ~ Normal(μ_att, σ_att)`, `def[t] ~ Normal(μ_def, σ_def)`, hyperpriors sur σ, hyperpriors sur μ
+- [ ] Likelihood Poisson bivarié + correction τ (Dixon-Coles) en PyMC
+- [ ] Time-decay weights via observed `weight`
+- [ ] Diagnostics : R-hat, ESS, posterior predictive checks
+- [ ] Backtest sur 6 tournois (sera ~5x plus lent que M2)
+- [ ] Comparaison vs M6_stack
+
+### Critères de sortie
+- M7 converge proprement (R-hat < 1.01 sur tous les params globaux)
+- M7 expose `predict_proba` et `predict_score_dist` qui prennent le posterior mean
+- Si M7 bat M6_stack : intégrer dans M6_stack (nouvelle vague)
+- Si M7 n'apporte rien : documenter pourquoi et passer à S9
+
+---
+
+## S9 — Spécialisation score exact (optionnel, J+5 → J+7)
+
+### Objectif
+**M8 = LightGBM 49-classes** (h, a) ∈ {0..6} × {0..6}, entraîné avec class weights inversement proportionnels à la fréquence empirique. Vise spécifiquement l'exact-score accuracy (où les modèles génératifs plafonnent ~14%).
+
+Optionnel : à activer seulement si la métrique exact-score reste > 4% en-dessous de l'objectif après S7+S8.

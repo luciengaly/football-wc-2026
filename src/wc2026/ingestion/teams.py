@@ -18,7 +18,7 @@ _ALIASES: dict[str, list[str]] = {
     "Cape Verde": ["Cabo Verde"],
     "Ivory Coast": ["Côte d'Ivoire", "Cote d'Ivoire"],
     "Turkey": ["Türkiye", "Turkiye"],
-    "Bosnia and Herzegovina": ["Bosnia-Herzegovina", "Bosnia"],
+    "Bosnia and Herzegovina": ["Bosnia-Herzegovina", "Bosnia", "Bosnia & Herzegovina"],
     "North Macedonia": ["Macedonia", "FYR Macedonia"],
     "Iran": ["IR Iran", "Islamic Republic of Iran"],
     "Russia": ["Russian Federation"],

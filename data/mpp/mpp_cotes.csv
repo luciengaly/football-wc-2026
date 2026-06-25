@@ -1,0 +1,73 @@
+﻿date,group,home_team,away_team,status,home_score,away_score,cote_home_win,cote_draw,cote_away_win,my_pred_home,my_pred_away
+2026-06-11,J,Mexico,South Africa,played,2,0,49,125,148,1,0
+2026-06-11,J,South Korea,Czech Republic,played,2,1,96,107,91,1,2
+2026-06-12,B,Canada,Bosnia and Herzegovina,played,1,1,65,117,125,2,1
+2026-06-12,H,United States,Paraguay,played,4,1,74,113,115,1,2
+2026-06-13,H,Australia,Turkey,played,2,0,126,115,66,0,1
+2026-06-13,E,Brazil,Morocco,played,1,1,55,122,140,2,2
+2026-06-13,E,Haiti,Scotland,played,0,1,154,131,44,0,3
+2026-06-13,B,Qatar,Switzerland,played,1,1,172,141,33,0,2
+2026-06-14,D,Germany,Curaçao,played,7,1,15,179,222,4,0
+2026-06-14,D,Ivory Coast,Ecuador,played,1,0,108,101,85,1,2
+2026-06-14,K,Netherlands,Japan,played,2,2,74,115,113,1,1
+2026-06-14,K,Sweden,Tunisia,played,5,1,72,110,122,3,1
+2026-06-15,F,Belgium,Egypt,played,1,1,57,122,135,1,0
+2026-06-15,F,Iran,New Zealand,played,2,2,63,116,130,1,1
+2026-06-15,L,Saudi Arabia,Uruguay,played,1,1,146,125,50,0,2
+2026-06-15,L,Spain,Cape Verde,played,0,0,16,166,217,3,1
+2026-06-16,A,Argentina,Algeria,played,3,0,43,129,159,3,0
+2026-06-16,A,Austria,Jordan,played,3,1,38,136,163,2,0
+2026-06-16,I,France,Senegal,played,3,1,46,128,153,2,1
+2026-06-16,I,Iraq,Norway,played,1,4,178,144,30,1,3
+2026-06-17,G,England,Croatia,played,4,2,59,119,133,3,1
+2026-06-17,G,Ghana,Panama,played,1,0,73,113,116,1,1
+2026-06-17,C,Portugal,DR Congo,played,1,1,34,140,170,3,1
+2026-06-17,C,Uzbekistan,Colombia,played,1,3,157,130,44,0,3
+2026-06-18,B,Canada,Qatar,played,6,0,71,104,148,2,1
+2026-06-18,J,Czech Republic,South Africa,played,1,1,62,112,142,1,0
+2026-06-18,J,Mexico,South Korea,played,1,0,69,117,129,1,1
+2026-06-18,B,Switzerland,Bosnia and Herzegovina,played,4,1,76,108,134,2,2
+2026-06-19,E,Brazil,Haiti,played,3,0,21,167,198,3,0
+2026-06-19,E,Scotland,Morocco,played,0,1,99,112,91,0,1
+2026-06-19,H,Turkey,Paraguay,played,0,1,84,113,126,1,1
+2026-06-19,H,United States,Australia,played,2,0,58,119,153,1,1
+2026-06-20,D,Ecuador,Curaçao,played,0,0,41,143,168,2,0
+2026-06-20,D,Germany,Ivory Coast,played,2,1,38,137,164,1,0
+2026-06-20,K,Netherlands,Sweden,played,5,1,67,122,131,2,1
+2026-06-20,K,Tunisia,Japan,played,0,4,118,103,91,0,1
+2026-06-21,F,Belgium,Iran,played,0,0,39,138,171,1,0
+2026-06-21,F,New Zealand,Egypt,played,1,3,148,116,59,0,1
+2026-06-21,L,Spain,Saudi Arabia,played,4,0,31,139,176,2,0
+2026-06-21,L,Uruguay,Cape Verde,played,2,2,72,109,137,1,0
+2026-06-22,A,Argentina,Austria,played,2,0,63,105,132,1,0
+2026-06-22,I,France,Iraq,played,3,0,22,166,189,2,0
+2026-06-22,A,Jordan,Algeria,played,1,2,152,139,67,0,2
+2026-06-22,I,Norway,Senegal,played,3,2,64,105,137,1,1
+2026-06-23,C,Colombia,DR Congo,played,1,0,77,111,123,1,0
+2026-06-23,G,England,Ghana,played,0,0,44,127,162,2,0
+2026-06-23,G,Panama,Croatia,played,0,1,165,123,36,0,2
+2026-06-23,C,Portugal,Uzbekistan,played,5,0,24,154,173,1,0
+2026-06-24,B,Bosnia and Herzegovina,Qatar,played,3,1,87,102,120,1,1
+2026-06-24,B,Canada,Switzerland,played,1,2,129,106,68,1,1
+2026-06-24,J,Mexico,Czech Republic,played,3,0,91,99,109,1,0
+2026-06-24,E,Morocco,Haiti,played,4,2,29,159,187,2,0
+2026-06-24,E,Scotland,Brazil,played,0,3,145,124,48,0,2
+2026-06-24,J,South Africa,South Korea,played,1,0,117,103,87,0,1
+2026-06-25,D,Curaçao,Ivory Coast,scheduled,,,163,118,53,0,2
+2026-06-25,D,Ecuador,Germany,scheduled,,,145,129,42,0,1
+2026-06-25,K,Japan,Sweden,scheduled,,,96,108,111,,
+2026-06-25,H,Paraguay,Australia,scheduled,,,74,104,131,,
+2026-06-25,K,Tunisia,Netherlands,scheduled,,,131,123,56,,
+2026-06-25,H,United States,Turkey,scheduled,,,93,102,109,,
+2026-06-26,L,Cape Verde,Saudi Arabia,scheduled,,,99,123,94,,
+2026-06-26,F,Egypt,Iran,scheduled,,,85,114,123,,
+2026-06-26,F,New Zealand,Belgium,scheduled,,,172,129,32,,
+2026-06-26,I,Norway,France,scheduled,,,141,108,68,,
+2026-06-26,I,Senegal,Iraq,scheduled,,,54,115,149,,
+2026-06-26,L,Uruguay,Spain,scheduled,,,143,112,57,,
+2026-06-27,A,Algeria,Austria,scheduled,,,96,103,107,,
+2026-06-27,C,Colombia,Portugal,scheduled,,,154,102,55,,
+2026-06-27,G,Croatia,Ghana,scheduled,,,57,120,138,,
+2026-06-27,C,DR Congo,Uzbekistan,scheduled,,,63,107,158,,
+2026-06-27,A,Jordan,Argentina,scheduled,,,165,145,32,,
+2026-06-27,G,Panama,England,scheduled,,,168,137,32,,

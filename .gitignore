@@ -13,11 +13,23 @@ htmlcov/
 venv/
 env/
 
-# Data (raw downloads can be re-fetched; processed/snapshots tracked optionally)
+# Data — ignore everything heavy/re-fetchable, but WHITELIST the small files
+# the deployed dashboard needs (panel-only, no 50 MB Transfermarkt CSVs).
+# NOTE: .gitignore does NOT allow trailing comments on pattern lines.
 data/raw/*
 !data/raw/.gitkeep
+# 3.7 MB — models fit on this at runtime
+!data/raw/results.csv
+# live odds snapshots (~13 KB each) for M9
+!data/raw/odds_*.parquet
 data/processed/*
 !data/processed/.gitkeep
+# fixtures + groups
+!data/processed/wc2026.parquet
+# market-value panels (M12 full + M12i injury-adjusted)
+!data/processed/tm_value_panel.parquet
+!data/processed/tm_value_panel_avail.parquet
+# data/snapshots/*.parquet and data/mpp/* are tracked (not ignored).
 
 # IDE
 .vscode/
@@ -37,3 +49,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+.env
+
+DEPLOY.md

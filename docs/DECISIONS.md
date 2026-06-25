@@ -5,6 +5,472 @@ Format : numéro, titre, contexte, décision, alternatives, conséquences.
 
 ---
 
+## ADR-028 — Module MPP : optimiseur de pronostics en espérance de points
+
+**Date** : 2026-06-25
+**Statut** : ✅ accepté
+
+**Contexte** : Application concrète du système à "Mon Petit Prono" (MPP), où l'on pronostique un score par match : gain = cote du résultat (indexée sur les bookmakers) + bonus de rareté si score exact, 0 si résultat faux. Pas de bankroll, mise unitaire, sans downside.
+
+**Décision** : Comme les paris sont à poids unitaire, indépendants et sans ruine, la stratégie optimale est de **maximiser l'espérance de points match par match** (pas de Kelly, la variance n'intervient pas). Règle de décision de Bayes :
+
+`s* = argmax_s [ cote(R_s)·P(résultat=R_s) + bonus·P(score=s) ]`
+
+avec `P(résultat)` = M13 (champion W/D/L) et `P(score)` = M2 (champion score). Bonus traité comme constante paramétrable (la popularité par score n'est pas disponible historiquement).
+
+**Validation (backtest 54 matchs joués, bonus moyen 40)** :
+
+| Stratégie | Points | Précision résultat | Scores exacts |
+|---|---|---|---|
+| **EV (nous)** | **2476** | 55.6% | 5 |
+| Toujours favori | 2135 | 64.8% | 5 |
+| Prono réel utilisateur | 1879 | 55.6% | 4 |
+| Mode M2 | 1714 | 53.7% | 4 |
+
+Notre stratégie marque **+32% vs le prono réel**. Insight central : précision résultat *plus basse* mais bien plus de points — on échange précision contre value (cotes élevées : outsiders, nuls sous-cotés).
+
+**Avantage terrain** : appliqué uniquement aux nations hôtes via le flag `neutral` de martj42 (vérifié : identique à l'heuristique `home_team ∈ hôtes`, 0 écart sur 72 matchs). Conforme à la réalité d'une CdM sur terrain neutre.
+
+**Conséquences** :
+- Nouveau module `src/wc2026/mpp/` (scoring, optimizer, backtest) + page dashboard "🃏 Conseil MPP".
+- Saisie des cotes via `data/mpp/mpp_cotes.csv`.
+- Doc dédiée : `docs/MPP.md`.
+
+**Limites** : bonus rareté constant (pas la popularité par score) ; calibration des nuls = risque clé ; hôte en extérieur légèrement sous-crédité.
+
+---
+
+## ADR-027 — Valeur ajustée des blessures (M12i) : bat M12, intégrée au champion M13
+
+**Date** : 2026-06-23
+**Statut** : ✅ accepté
+
+**Contexte** : Bonus du sprint S11. La table `player_injuries.csv` (salimt) fournit des périodes de blessure datées (`from_date`, `end_date`) — exploitables sans leakage pour savoir qui était indisponible à la date d'un match. Idée : remplacer la valeur du squad par celle du **squad réellement disponible** (top-26 parmi les joueurs non blessés à la date).
+
+**Implémentation** : second panel `(pays, mois) → (valeur off/def)` calculé en excluant les joueurs blessés au début du mois (346 235 cellules (joueur, mois) blessées). Flag `use_availability` sur M12. Validation qualitative : France à -19.5% avant WC 2022 (Pogba/Kanté/Benzema blessés — historiquement exact).
+
+**Backtest standalone (290 matchs)** :
+
+| Modèle | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| M12 (valeur pleine) | 0.9710 | 0.5741 | 0.1939 | 53.8% | 0.0203 |
+| **M12i (disponibilité)** | **0.9644** | **0.5707** | **0.1921** | **54.5%** | **0.0178** |
+
+M12i **bat M12 sur les 5 métriques** — gain net.
+
+**Dans le blend 3-voies (134 matchs)** :
+
+| Blend | log_loss | brier | rps | acc | ece |
+|---|---|---|---|---|---|
+| M3+M9+M12 | 1.0158 | 0.6040 | 0.2018 | 51.5% | 0.0191 |
+| **M3+M9+M12i** | **1.0136** | **0.6031** | **0.2014** | 51.5% | 0.0297 |
+
+Améliore log-loss/Brier/RPS (ECE légèrement dégradée mais reste bonne).
+
+**Décision** : Le champion **M13_blend3 utilise désormais la valeur ajustée des blessures** (M12i) comme composante valeur. Le M12 standalone reste en valeur pleine dans le registry (référence Peeters de l'ADR-025, comparaison transparente).
+
+**Conséquences** :
+- `Blend3.value_ = MarketValueModel(use_availability=True)`
+- Deux panels cachés : `tm_value_panel.parquet` (plein) + `tm_value_panel_avail.parquet` (disponibilité)
+- Snapshots re-backfillés
+- `get_shared_store()` construit les deux panels une fois
+
+**Caveats** :
+- Résolution mensuelle approximative (un joueur blessé mi-mois compte comme indispo tout le mois si la blessure couvre le 1er).
+- Qualité variable des données blessures (Japon -48% en 2022 semble surévalué). Le gain agrégé reste positif malgré ce bruit.
+
+---
+
+## ADR-026 — M13_blend3 (M3 + M9 + M12, équipondéré) désigné champion W/D/L
+
+**Date** : 2026-06-23
+**Statut** : ✅ accepté
+
+**Contexte** : Avec M12 (valeur marchande, ADR-025) on dispose pour la première fois de **trois signaux orthogonaux** : résultats historiques (M3), marché des paris (M9), valeur des joueurs (M12). C'est précisément la décorrélation qui manquait aux blends ratés de S7 (M5/M6 étaient des variantes de M2).
+
+**Sweep des poids sur 134 matchs (les 3 signaux présents)** :
+
+| Poids M3/M9/M12 | log_loss | brier | rps | acc | ece |
+|---|---|---|---|---|---|
+| (1,0,0) M3 | 1.0368 | 0.6140 | 0.2062 | 52.2% | 0.0456 |
+| (0,1,0) M9 | 1.0195 | 0.6091 | 0.2034 | 51.5% | 0.0514 |
+| (0,0,1) M12 | 1.0238 | 0.6080 | 0.2042 | 52.2% | 0.0450 |
+| M11 (0.5,0.5,0) | 1.0236 | 0.6089 | 0.2037 | 52.2% | 0.0373 |
+| **(⅓,⅓,⅓)** | **1.0159** | **0.6041** | **0.2018** | 51.5% | **0.0191** |
+
+L'équipondéré 3-voies **bat tous les modèles précédents** sur log-loss, Brier, RPS et ECE simultanément.
+
+**Décision** : `M13_blend3` = **moyenne équipondérée des composantes disponibles** par match :
+- 3 signaux présents → (⅓, ⅓, ⅓)
+- M3 + M12 (pas d'odds) → (½, ½)
+- M3 seul → M3
+M3 est toujours disponible, donc il y a toujours ≥1 composante.
+
+**Pourquoi équipondéré et pas un simplex optimisé** : sur 134 matchs un simplex sur-apprend ; la surface log-loss(w) est plate autour du centre. L'équipondéré est le choix robuste et explicable.
+
+**Pourquoi champion pour le live malgré un match nul sur l'ensemble 290** : sur les 290 matchs (dont 156 sans odds), M13 ≈ M11 (log-loss 0.9548 vs 0.9546, M13 légèrement moins bon en accuracy). MAIS ce régime n'est pas représentatif du live : **31/32 matchs WC 2026 à venir ont odds + valeur**, donc le régime pertinent est celui des 134 matchs où M13 gagne nettement. M13 est désigné champion sur cette base, avec le caveat documenté.
+
+**Conséquences** :
+- `CHAMPION_MODEL = "M13_blend3"` (étoile ⭐ dashboard)
+- M12 et M13 ajoutés au registry du pipeline (8 modèles)
+- M2 reste champion score-distribution (ni odds ni valeur ne donnent de distribution de scores)
+- Singleton `get_shared_store()` pour ne charger les 900k valeurs qu'une fois par run
+- M11 reste disponible mais déclassé
+
+**Caveats** :
+- Bench 134 matchs, sample modeste.
+- M12 sans odds peut légèrement dégrader l'accuracy → surveiller en live ; si le régime sans-odds devient fréquent (knockout, fixtures lointaines), envisager de ne pas inclure M12 quand odds absentes.
+
+---
+
+## ADR-025 — M12_market_value : la valeur Transfermarkt bat l'Elo (Peeters confirmé)
+
+**Date** : 2026-06-23
+**Statut** : ✅ accepté
+
+**Contexte** : Direction "approches avancées" — implémentation d'un modèle piloté par la **valeur marchande des joueurs** (Transfermarkt), motivé par Peeters (2018, *Int. J. Forecasting*) qui montre que les valeurs agrégées battent FIFA ranking et Elo pour l'international.
+
+**Données** : dataset GitHub `salimt/football-datasets` — 901k valeurs marchandes datées (2003-2025), positions, sélections nationales. Résolution `team_id → pays` par citoyenneté modale des joueurs sélectionnés (corrige le biais diaspora : la Côte d'Ivoire passe de 716M€ gonflés à 407M€ corrects). Panel mensuel `(pays, mois) → (valeur off/def)` précalculé et caché (`data/processed/tm_value_panel.parquet`, 40k entrées) → lookups instantanés.
+
+**Structure du modèle (novatrice vs Peeters qui n'utilise que la valeur totale)** :
+```
+log(λ_home) = β0 + β_att·val_off_H + β_def·val_def_A + γ·domicile
+log(λ_away) = β0 + β_att·val_off_A + β_def·val_def_H
+```
+La valeur offensive de l'équipe (Attack+Midfield) pilote son attaque ; la valeur défensive de l'adversaire (Defender+GK) module les buts encaissés.
+
+**Coefficients ajustés (MLE, time-decay 3 ans)** : β_att = +0.186, β_def = -0.198, γ = +0.317 — exactement le signe attendu par la théorie.
+
+**Bench 290 matchs (6 tournois)** :
+
+| Modèle | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| M1_elo | 0.9807 | 0.5775 | 0.1941 | 55.5% | 0.0314 |
+| M2_poisson | 0.9606 | 0.5661 | 0.1889 | 56.6% | 0.0324 |
+| M3_dixon_coles | 0.9607 | 0.5662 | 0.1889 | 57.2% | 0.0259 |
+| **M12_market_value** | 0.9710 | 0.5741 | 0.1939 | 53.8% | **0.0203** |
+
+**Lecture** :
+- **M12 bat M1 (Elo)** sur log-loss/Brier/RPS → confirme Peeters sur notre pipeline.
+- M12 seul est sous M2/M3 (notamment en accuracy), MAIS a la **meilleure ECE de tous** (0.0203).
+- Surtout : M12 est **orthogonal** à M2/M3/M9 (valeur joueurs ≠ résultats ≠ odds). C'est ce qui le rend précieux **en blend** (cf. ADR-026), là où les variantes de M2 (S7) avaient échoué.
+
+**Détails techniques** :
+- Couverture : 48/48 équipes WC 2026 résolues, 290/290 matchs du bench.
+- Coût : panel 390s une fois, puis fit 0.2s.
+- Bonus disponible mais non exploité : `player_injuries.csv` (pondération par dispo réelle) — piste future.
+
+**Conséquences** : voir [ADR-026] pour l'intégration en blend champion.
+
+---
+
+## ADR-024 — M11_blend (M3 + M9, 50/50) désigné nouveau champion W/D/L
+
+**Date** : 2026-06-22
+**Statut** : ✅ accepté
+
+**Contexte** : Suite à l'évidence empirique d'ADR-023 (M9 bat M3 sur log-loss/Brier/RPS), on cherche s'il existe un blend M3 + M9 qui combine les forces des deux : la calibration de M3 (ECE 0.046) et le signal raffiné de M9 (log-loss 1.020).
+
+**Méthode** : sweep sur 134 matchs historiques, blend pondéré `p = w * p_M9 + (1-w) * p_M3`, w ∈ {0, 0.3, 0.5, 0.6, 0.7, 1.0} :
+
+| w_M9 | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| 0.0 (M3) | 1.0368 | 0.6140 | 0.2062 | 52.2% | 0.0456 |
+| 0.30 | 1.0276 | 0.6103 | 0.2044 | 52.2% | **0.0320** |
+| **0.50** | **1.0236** | **0.6089** | **0.2037** | **52.2%** | 0.0373 |
+| 0.70 | 1.0209 | 0.6083 | 0.2033 | 51.5% | 0.0390 |
+| 1.00 (M9) | 1.0195 | 0.6091 | 0.2034 | 51.5% | 0.0514 |
+
+**Décision** : `M11_blend` = M3 ⊕ M9 avec **w = 0.5** (no-information prior). À cette valeur, M11 gagne sur **Brier ET RPS**, conserve l'accuracy de M3 (52.2%), et présente une ECE de 0.037 qui est meilleure que les deux modèles séparés (M3 0.046, M9 0.051).
+
+**Comportement de fallback** : quand M9 retourne NaN (matchs sans odds publiés), M11 prend purement M3. Donc M11 ≥ M3 sur toutes les métriques garanti — pire cas il est identique à M3.
+
+**Conséquences** :
+- `CHAMPION_MODEL = "M11_blend"` dans le dashboard (étoile ⭐)
+- M11 ajouté au registry du pipeline live
+- M2 reste **champion score-distribution** (M11 ne produit pas de distribution de scores — M9 n'en a pas)
+- Choix du w = 0.5 documenté ici ; pourrait être tuné dynamiquement après ~50 matchs WC 2026 si les pondérations divergent
+- Snapshots 11-22 juin re-backfillés avec M11
+
+**Caveats** :
+- Bench sur 134 matchs uniquement. Sample modeste, écart-type sur log-loss ~0.04.
+- Le blend a été choisi sur le même set qui sert à le valider — léger risque de "best on test". Mais la surface log-loss(w) est très lisse (0.5 à 0.7 quasi-identiques) → robuste.
+
+---
+
+## ADR-023 — M9_odds bat M2/M3 sur le bench historique 134 matchs
+
+**Date** : 2026-06-22
+**Statut** : ✅ accepté (positif)
+
+**Contexte** : ADR-022 documente l'intégration live de M9_odds via The Odds API mais ne pouvait pas le bencher historiquement (free tier = pas d'odds passés). Découverte d'un dataset GitHub (eatpizzanot/soccer-dataset) qui aggrège The Odds API + Football-Data.co.uk depuis juin 2020 — couvre 170/290 matchs de notre bench 6-tournois (WC 2022 + Euro 2020/2024 + Copa 2024).
+
+**Résultats (134 matchs avec coverage des outcomes connus)** :
+
+| Modèle | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| M1_elo | 1.0892 | 0.6428 | 0.2191 | 50.0% | 0.0613 |
+| M2_poisson | 1.0374 | 0.6148 | 0.2063 | 51.5% | 0.0493 |
+| M3_dixon_coles | 1.0368 | 0.6140 | 0.2062 | **52.2%** | **0.0456** |
+| **M9_odds** | **1.0195** | **0.6091** | **0.2034** | 51.5% | 0.0514 |
+
+**Lecture** : M9 gagne **log-loss, Brier, RPS** (les 3 métriques calibration-sensibles). Marge nette sur log-loss (+1.7% vs M3). M3 reste devant sur accuracy et ECE.
+
+**Per-tournament log-loss** :
+- Copa 2024 (3 matchs, sample minuscule) : M1 best
+- Euro 2020 (34) : M3 best
+- Euro 2024 (42) : **M9 best**
+- WC 2022 (55) : **M9 best**
+
+Les wins de M9 sont sur les plus gros échantillons, ce qui renforce la conclusion.
+
+**Caveats** :
+- Bench réduit à 134 matchs (WC 2018 et Copa 2021 sans odds disponibles)
+- Le dataset eatpizzanot ne donne qu'**1 bookmaker par fixture** (probablement le premier disponible) au lieu d'une médiane sur plusieurs. En live on aggrège 24 bookmakers → M9 live devrait être encore meilleur calibré.
+- Le free tier de The Odds API ne permet pas la reproduction directe — on a documenté la dépendance externe à eatpizzanot/soccer-dataset.
+
+**Décision** : voir [ADR-024] pour la désignation du blend M11 comme champion. M9 seul est jugé légèrement trop confiant (ECE 0.051 vs M3 0.046).
+
+---
+
+## ADR-022 — Sprint S10 : intégration des cotes via The Odds API
+
+**Date** : 2026-06-22
+**Statut** : ✅ accepté (eval live en attente)
+
+**Contexte** : Suite à la conclusion de [ADR-021] (plafond atteint avec données seules), passage à la source externe la plus prometteuse : les cotes bookmakers. The Odds API offre un tier gratuit (500 req/mois) couvrant le `soccer_fifa_world_cup`. 24 bookmakers européens couverts (Pinnacle, Bet365, William Hill, Betclic, etc.).
+
+**Décision** :
+- Intégrer un nouveau modèle **M9_odds** qui n'a pas de phase fit : il fait juste un lookup des cotes médianes (sur les 24 bookmakers) et les devig via 1/odds renormalisé.
+- M9 retourne NaN pour les matchs sans cotes (typiquement les fixtures trop éloignées). Le dashboard et l'évaluation traitent les NaN.
+- Le pipeline `refresh` fetche les cotes en best-effort (échec non bloquant).
+- Quota géré conservativement : 1 fetch quotidien max (`x-requests-remaining` est loggé à chaque appel).
+
+**Couverture initiale** (J+3, fetch du 2026-06-22) :
+- 31 matchs × 24 bookmakers
+- Coverage : 31/32 matchs upcoming WC 2026 (Argentina-Austria du jour manquant car déjà clos par les bookmakers)
+- Fuzzy date matching (±1 jour) pour absorber le décalage UTC ↔ date locale de martj42
+
+**Premières observations sur les divergences M2/M3 vs M9** :
+- M9 systématiquement **plus confiant sur les favoris** : Portugal vs Uzbekistan M2 68% → M9 82% ; Bosnia vs Qatar 50% → 66% ; Tunisia vs Pays-Bas 70% → 85%
+- Signature classique du marché vs modèles académiques : le marché intègre des signaux non disponibles dans nos features (blessures, suspensions, motivation, météo).
+
+**Limites du free tier** :
+- Pas d'odds historiques → impossible de backtest M9 sur les 6 tournois passés ni sur les 40 matchs WC 2026 déjà joués.
+- Eval seulement live, au fil des matchs joués sur les 7 prochains jours.
+
+**Prochaines étapes** :
+- Configurer un refresh quotidien (`scripts/daily_refresh.bat` → odds + predict + snapshot)
+- Évaluer M9 vs M2/M3 au fil des matchs joués
+- Si M9 confirme son avance, construire ensemble M2/M3 + M9 ou désigner M9 champion W/D/L
+- ADR de désignation champion à mettre à jour selon résultats
+
+---
+
+## ADR-021 — Plafond empirique atteint : M2/M3 sont à l'optimum extractible des données
+
+**Date** : 2026-06-19
+**Statut** : 📌 reconnaissance d'état
+
+**Contexte** : Sprints S7 (vague quick wins) et S9 (M8 score-direct) cumulent **5 expériences modèles successives** qui toutes échouent à battre M2 / M3 sur 290 matchs :
+
+| Modèle | Approche | Résultat |
+|---|---|---|
+| M5_nb | Negative Binomial pour over-dispersion | ❌ α optimal ≈ 0, dégénère en Poisson (ADR-015) |
+| M6_stack | LogReg meta-learner sur M1-M4 | ❌ Sous M2/M3 sur 290 matchs (ADR-016) |
+| M2_cal / M3_cal | Calibration isotonic out-of-sample | ❌ -4pp d'accuracy (perte de training, ADR-017) |
+| M7 empirical Bayes | Ridge ∈ {0.005, 0.05, 0.5, 2} sur M2 | ❌ Toutes valeurs ≈ M2 actuel, optimum déjà atteint |
+| M8 LGBM 49-classes | Classifier direct sur le score exact | ❌ Sous M2 sur exact-acc / top3-acc / score log-loss (ADR-020) |
+
+**Interprétation** : avec **49 477 matchs internationaux historiques + Elo + forme + repos + confédération + lambdas Poisson**, la performance plafonne à :
+- **log-loss ≈ 0.96** (M2 / M3)
+- **accuracy W/D/L ≈ 57%** (M3)
+- **exact-score acc ≈ 13.8%** (M2)
+- **ECE ≈ 0.03**
+
+Ces chiffres sont au niveau de la **littérature académique SOTA** en prédiction internationale (Constantinou et al. ~58% accuracy, Karlis-Ntzoufras ~14% exact-score). Le gain marginal possible avec nos données s'arrête là.
+
+**Décision** : Acceptation du plafond. Les nouveaux modèles à essayer ne seront pas des variations sur (Poisson, hyperparam, ensemble) — il faudra changer la **source de signal** :
+
+1. **Données joueurs** (Transfermarkt/FBref scraping) — absences, suspensions, market value squad. Gain attendu : +1-3pp accuracy. Coût : 2-3 jours d'ingénierie fragile.
+2. **Cotes des bookmakers** — meilleure source de signal connue. Gain attendu : +5-10pp. Coût : scraping/légal incertain.
+3. **xG par équipe sur fenêtre récente** — Understat/FBref. Sparse pour l'international, peu d'intérêt.
+4. **Manager / formation tactique** — quasi inexploitable sans saisie manuelle.
+
+**Conséquences** :
+- Fin du sprint d'ajout de modèles (S7-S9 clos).
+- Si nouveau modèle, il devra venir avec une nouvelle feature externe (pas une nouvelle architecture).
+- Réorienter le projet vers : (a) monitoring live + métriques cumulées (déjà fait), (b) données joueurs si l'utilisateur veut investir, (c) acceptation du plafond et focus opérationnel.
+
+---
+
+## ADR-020 — M8 LightGBM 49-classes : résultat négatif
+
+**Date** : 2026-06-19
+**Statut** : ❌ rejeté
+
+**Contexte** : Sprint S9 — dernier essai après l'abandon de PyMC. Approche fondamentalement différente : classification multinomiale à 49 classes ({0..6} × {0..6}) avec features standard + λ_H/λ_A de M2 en input. L'idée : LightGBM apprend des *corrections* sur la base de M2.
+
+**Itérations testées** :
+
+| Config | exact_acc | top3_acc | score_log_loss |
+|---|---|---|---|
+| Class-weighted (cap 5x) + n_est=500 | 6.25% | 31.25% | 3.31 |
+| No weights, n_est=500 | 7.81% | 26.56% | 3.57 |
+| No weights, n_est=200, reg=2.0 | 9.4% | 28.1% | 3.14 |
+| **No weights, n_est=100, reg=3.0** | **9.4%** | **26.6%** | **3.04** |
+| **M2 baseline** | **10.9%** | **32.8%** | **3.03** |
+
+Même avec configuration la plus simple, M8 **fait à peine match nul** avec M2 sur le score-log-loss (3.04 vs 3.03) et perd sur exact-acc (-1.5pp) et top3-acc (-6.2pp).
+
+**Diagnostic** :
+- 49 classes × ~50k samples = parameters per class ≈ 1000. Trop fin pour les classes rares (5-1, 4-3...).
+- Les features standard (form, rest, confederation) n'ajoutent pas de signal au-delà des λ M2.
+- Le 49-class classification convexe sur cross-entropy ne reproduit pas la structure générative correcte (corrélation goals_h ⊥ goals_a sachant team strengths).
+
+**Conséquences** :
+- M8 rejeté du bench.
+- Le `src/wc2026/models/lgbm_score.py` reste dans le codebase pour reproductibilité.
+- Voir [ADR-021] pour la conclusion globale "plafond empirique atteint".
+
+---
+
+## ADR-019 — Skip de M7 PyMC bayésien hiérarchique : empirical Bayes négatif
+
+**Date** : 2026-06-19
+**Statut** : ⏸️ reporté (négatif)
+
+**Contexte** : Sprint S8 — implémentation prévue d'un Dixon-Coles hiérarchique bayésien via PyMC (ADVI). Le bénéfice attendu : shrinkage adaptatif des forces d'équipe via un hyper-prior `att[t] ~ Normal(0, σ_att)` au lieu d'un ridge fixe.
+
+**Quick check empirical Bayes** : avant d'investir 1-2 jours dans PyMC, on a tuné le ridge de M2 sur 4 valeurs {0.005, 0.05, 0.5, 2.0} via bench 6 tournois (290 matchs) :
+
+| Ridge | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| 0.005 | 0.9606 | 0.5660 | 0.1889 | 56.90% | 0.0307 |
+| 0.05 (actuel) | 0.9606 | 0.5661 | 0.1889 | 56.55% | 0.0324 |
+| 0.5 | 0.9623 | 0.5685 | 0.1897 | 56.55% | 0.0276 |
+| 2.0 | 0.9699 | 0.5754 | 0.1927 | 55.86% | 0.0318 |
+
+**Résultat** : la régularisation optimale est dans la fourchette [0.005, 0.05] et **M2 est déjà à l'optimum**. Tuning du ridge ne change rien sur log-loss/Brier/RPS, marginal sur ECE (mais dégrade l'accuracy).
+
+**Implication pour PyMC** : la valeur ajoutée du Bayesian hiérarchique = régularisation adaptative + shrinkage. Si la régularisation fixe optimale ne bouge pas la performance, la version adaptative non plus. Estimation du gain réel : 0% sur log-loss, peut-être 0-0.5% sur ECE.
+
+**Décision** : Skip de l'implémentation PyMC. Coût (1-2j + dépendances + g++ manquant sur Windows + mode Python pur 5-10x plus lent) > bénéfice attendu (~0%). Le code `src/wc2026/models/bayesian.py` est laissé comme squelette pour usage futur si on change d'avis.
+
+**Conséquences** :
+- S8 fermé sans implémentation.
+- PyMC 6.0.1 installé reste utilisable si on décide de re-investir.
+- Voir [ADR-021] pour la conclusion sur le plafond empirique.
+
+---
+
+## ADR-018 — Champion dual : M3 W/D/L + M2 score-niveau
+
+**Date** : 2026-06-19
+**Statut** : ✅ accepté
+
+**Contexte** : Avec le refactor 2-étapes de M3 (ADR-013) et le bench étendu post-S7, M3 Dixon-Coles dépasse maintenant M2 sur accuracy (57.24% vs 56.55%) et ECE (0.0259 vs 0.0324) tout en étant statistiquement à égalité sur log-loss / Brier / RPS. Mais sur le score-level (ADR-010), M2 garde l'avantage exact-score (13.79% vs 12.41%).
+
+**Décision** : Champion dual selon la métrique :
+- **M3 Dixon-Coles** = champion **W/D/L** (page Predictions, choix d'outcome)
+- **M2 Poisson** = champion **distribution de scores** (page Score detail, heatmap + top-5)
+
+**Conséquences** :
+- `CHAMPION_MODEL` du dashboard pointe vers M3 sur Predictions (l'étoile dans le dropdown)
+- La page Score detail garde M2 comme moteur (cohérent avec le bench score-niveau ADR-010)
+- Documentation : noter clairement que les deux champions servent des questions différentes
+
+---
+
+## ADR-017 — Calibration isotonic : résultat négatif sur 290 matchs
+
+**Date** : 2026-06-19
+**Statut** : ❌ rejeté
+
+**Contexte** : Sprint S7 vague 1 prévoyait d'appliquer une calibration isotonic out-of-sample à M2 et M3. L'idée : améliorer l'ECE de ~0.06 à <0.04 sans dégrader log-loss/accuracy.
+
+**Approche** :
+1. Split du training en pre-cutoff (base train) / post-cutoff (cal set, 365j)
+2. Fit base sur pre-cutoff, prédire sur cal set out-of-sample
+3. Fit isotonic par classe sur (proba_pred, outcome)
+4. À predict-time, utiliser la base pré-cutoff + calibrators (pas de refit, sinon les calibrators ne s'appliquent plus)
+
+**Résultats (bench 6 tournois)** :
+
+| Modèle | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| M2_poisson | 0.9606 | 0.5661 | 0.1889 | 56.55% | 0.0324 |
+| M2_cal | 0.9931 | 0.5778 | 0.1930 | 52.76% | 0.0423 |
+
+**M2_cal est PIRE que M2 sur toutes les métriques**, y compris l'ECE qu'elle était censée améliorer. Pourquoi :
+- Le base model perd la dernière année de données (utilisée pour calibrer). En foot international avec ~5-6k matchs/an, c'est ~5k matchs en moins → forces d'équipes plus anciennes, moins précises.
+- Les calibrators apprennent un biais qui ne transfère pas bien parce que le base sous-jacent est sous-entraîné.
+- Solution alternative théorique : K-fold cross-validation pour utiliser toutes les données, mais coût × K ≈ 10×.
+
+**Conséquences** :
+- Calibration isotonic rejetée pour ce projet. Wrapper `CalibratedModel` reste dans le code (utilisable si besoin futur) mais pas dans le bench officiel.
+- Pour réduire l'ECE, préférer une approche structurelle : passer à M3 (ECE 0.0259 sans calibration) ou plus tard M7 bayésien.
+
+---
+
+## ADR-016 — M6_stack (LogReg meta-learner) : résultat négatif sur 290 matchs
+
+**Date** : 2026-06-19
+**Statut** : ❌ rejeté
+
+**Contexte** : Sprint S7 vague 1 prévoyait un stacking ensemble M1-M4 → LogReg multinomial L2. Premier essai WC 2022 (64 matchs) prometteur : M6_stack avait la meilleure log-loss (1.029 vs M2 1.043). Mais 64 matchs = bruit.
+
+**Bench étendu (290 matchs, 6 tournois)** :
+
+| Modèle | log_loss | brier | rps | accuracy | ece |
+|---|---|---|---|---|---|
+| M2_poisson | 0.9606 | 0.5661 | 0.1889 | 56.55% | 0.0324 |
+| M3_dixon_coles | 0.9607 | 0.5662 | 0.1889 | 57.24% | 0.0259 |
+| **M6_stack** | 0.9638 | 0.5719 | 0.1913 | 55.52% | 0.0238 |
+
+**M6_stack ne bat plus** M2/M3 — sauf sur l'ECE marginale (0.0238 vs 0.0259 pour M3). Sur les 4 autres métriques, M6_stack est légèrement en-dessous.
+
+**Diagnostic** :
+- M1, M2, M3 sont **trop corrélés** entre eux (tous basés sur le même squelette Elo/Poisson). Le stacking gagne quand les base models ont des erreurs décorrélées.
+- M4 LightGBM est faible et apporte plus de bruit que de signal.
+- La meta-training set (~365j × 15 matchs/j) est suffisante pour LogReg mais le meta-learner finit par sur-pondérer M2 ou M3 sans vraie diversité à exploiter.
+
+**Conséquences** :
+- M6_stack rejeté du bench officiel.
+- Retiré du `_registered_models()` pour ne pas alourdir le pipeline quotidien (~14s/jour économisés).
+- Pour qu'un stacking marche il faudrait des base models réellement différents (ex : M2 + M7 bayésien + M8 score-direct LightGBM). On y reviendra après S8.
+
+---
+
+## ADR-015 — M5_nb Negative Binomial : essai négatif (dégénère en Poisson)
+
+**Date** : 2026-06-19
+**Statut** : ❌ rejeté (NB non retenu dans le bench officiel)
+
+**Contexte** : Sprint S7 vague 1 prévoyait d'ajouter une Negative Binomial pour gérer l'over-dispersion empirique des buts internationaux (var/mean = 1.80 sur 49k matchs, soit 80% au-dessus de Poisson). Réponse aussi au retour utilisateur sur "le modèle prédit rarement 3+ buts".
+
+**Mesure** : Implémentation NB2 (Var = μ + α μ²) avec fit 2-étapes (Poisson MLE puis α via Brent 1D). Sur 49 405 matchs d'entraînement :
+
+```
+alpha=0.000   weighted NLL = 7,861.70   (Poisson)
+alpha=0.050   weighted NLL = 7,878.40
+alpha=0.100   weighted NLL = 7,905.97
+alpha=0.200   weighted NLL = 7,978.13
+alpha=0.500   weighted NLL = 8,240.27
+```
+
+L'optimum est à **α = 0** : la NB dégénère exactement en Poisson.
+
+**Explication** : L'over-dispersion marginale (var=2.64, mean=1.47) est **entièrement expliquée par l'hétérogénéité des équipes** modélisée via les paramètres att/def. Conditionnellement à μ_match (la force du couple), la variance résiduelle = mean → Poisson est correcte. C'est un résultat statistique connu : la "mixture de Poissons" (un par couple d'équipes) produit une marginale over-dispersée même si chaque composant est Poisson pur.
+
+**Conséquences** :
+- M5_nb laissé dans le codebase (`src/wc2026/models/negbin.py`) pour reproductibilité de l'expérience.
+- **Pas registered** dans le bench officiel — identique numériquement à M2 sur nos données.
+- Le retour utilisateur "rarement 3+ buts" n'est donc pas un problème de dispersion mais un problème de MODE (mode de Poisson(λ=1.5) = 1). Réponse adéquate : affichage E[H]:E[A] + top-5 scores (déjà fait).
+- La voie pour vraiment capturer des scores élevés serait soit (a) un **modèle de mélange à 2 régimes** ("tight" vs "open game"), soit (b) une **NB avec α dépendant de μ** (gamma-Poisson hiérarchique). Reporté en S8 ou plus tard.
+
+---
+
 ## ADR-014 — Mid-tournament review J+0 sur 28 matchs
 
 **Date** : 2026-06-19

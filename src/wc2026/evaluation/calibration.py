@@ -31,12 +31,16 @@ class CalibratedModel(Model):
         self.name = f"{base_model.name}_iso"
 
     def fit(self, matches: pd.DataFrame) -> Self:
-        """Strict hold-out: fit base model on data BEFORE cutoff, calibrate
-        on the held-out window (out-of-sample predictions).
+        """Strict hold-out calibration without invalidating the calibrators.
 
-        Then refit base on the full training set so the live predictions
-        benefit from all data (calibrators learned the bias pattern, which
-        should generalise).
+        Key correctness point: the calibrators are learned on the base model's
+        *pre-cutoff* outputs. If we then refit the base on the FULL dataset,
+        the calibrators no longer apply to the right distribution and the
+        whole pipeline gets worse (observed empirically — see ADR-016).
+
+        So we keep the pre-cutoff base for both calibrator fitting AND live
+        prediction. We sacrifice the most-recent N days of training data, but
+        the calibration stays valid.
         """
         played = matches.dropna(subset=["home_score", "away_score"]).copy()
         cutoff = played["date"].max() - pd.Timedelta(days=self.calibration_window_days)
@@ -51,7 +55,7 @@ class CalibratedModel(Model):
                 c.fit(np.array([0.0, 1.0]), np.array([0.0, 1.0]))
             return self
 
-        # Step 1: fit base on pre-cutoff data
+        # Step 1: fit base on pre-cutoff data (this is the model used at predict time)
         self.base_model.fit(base_train)
 
         # Step 2: get out-of-sample preds on the calibration window
@@ -65,8 +69,7 @@ class CalibratedModel(Model):
             iso.fit(proba.iloc[:, class_idx].to_numpy(), (y_arr == class_idx).astype(float))
             self.calibrators_.append(iso)
 
-        # Step 3: refit base on full data for live use
-        self.base_model.fit(matches)
+        # NB: deliberately no refit on full data — see docstring.
         return self
 
     def predict_proba(self, matches: pd.DataFrame) -> pd.DataFrame:
